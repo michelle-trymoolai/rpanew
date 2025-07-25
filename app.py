@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta, timezone
@@ -42,9 +42,6 @@ from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import func
 import importlib.util
 import logging
-import threading
-import uuid
-import json
 
 app = Flask(__name__)
 load_dotenv()  # This should be called before using os.getenv()
@@ -57,73 +54,6 @@ bcrypt = Bcrypt(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 now = datetime.now(timezone.utc)
-
-# ===== MFA SESSION STORE =====
-mfa_store = {}
-mfa_lock = threading.Lock()
-CODE_TTL_SECONDS = 300  # expire after 5 minutes
-
-def cleanup_expired():
-    while True:
-        now = time.time()
-        with mfa_lock:
-            expired = [sid for sid,(code,ts) in mfa_store.items() if now-ts > CODE_TTL_SECONDS]
-            for sid in expired:
-                del mfa_store[sid]
-        time.sleep(60)
-
-# start cleanup thread at app startup
-threading.Thread(target=cleanup_expired, daemon=True).start()
-
-# ===== MFA ROUTES =====
-@app.route('/mfa-request', methods=['POST'])
-@csrf.exempt
-def mfa_request():
-    """Generate a new MFA session ID for RPA script"""
-    sid = str(uuid.uuid4())
-    with mfa_lock:
-        mfa_store[sid] = (None, time.time())
-    return jsonify({'session_id': sid}), 200
-
-@app.route('/mfa-submit', methods=['POST'])
-@csrf.exempt
-def mfa_submit():
-    """Store MFA code submitted by user"""
-    data = request.get_json() or {}
-    sid, code = data.get('session_id'), data.get('code')
-    if not sid or not code:
-        return jsonify({'error': 'session_id and code required'}), 400
-     
-    with mfa_lock:
-        if sid not in mfa_store:
-            return jsonify({'error': 'invalid or expired session_id'}), 404
-        # overwrite the code, keep original timestamp
-        _, ts = mfa_store[sid]
-        mfa_store[sid] = (code, ts)
-    return jsonify({'status': 'received'}), 200
-
-@app.route('/mfa-check/<session_id>', methods=['GET'])
-@csrf.exempt
-def mfa_check(session_id):
-    """Return MFA code for RPA script polling"""
-    with mfa_lock:
-        entry = mfa_store.get(session_id)
-    if not entry:
-        return jsonify({'error': 'invalid or expired session_id'}), 404
-    code, ts = entry
-    return jsonify({'code': code}), 200
-
-@app.route('/mfa-pending', methods=['GET'])
-@login_required
-def mfa_pending():
-    """Check for pending MFA sessions and trigger modal"""
-    session_id = request.args.get('session_id')
-    if session_id:
-        with mfa_lock:
-            if session_id in mfa_store:
-                return jsonify({'pending': True, 'session_id': session_id})
-    return jsonify({'pending': False})
-
 @login_manager.user_loader
 def load_user(user_id):
     return UserDetails.query.get(int(user_id))
@@ -284,7 +214,7 @@ def run_aetna_insurance_rpa():
 
     try:
         subprocess.run(
-            ["python3", "rpa/aetnapriorauth.py", json.dumps(data, default=str)],
+            ["python", "rpa/aetnapriorauth.py", json.dumps(data, default=str)],
             check=True
         )
         
@@ -313,7 +243,7 @@ import json
 def run_anthem_rpa():
     try:
         subprocess.run(
-            ["python3", "rpa/anthemonco.py"],
+            ["python", "rpa/anthemonco.py"],
             check=True
         )
         return jsonify({'message': 'Anthem RPA executed successfully'})
@@ -1886,6 +1816,8 @@ def edit_claim(claim_id):
                            menus=get_user_menus(current_user.role_id),
                            user=current_user)
 
+
+
 @csrf.exempt  # ✅ Correct usage
 @app.route("/api/get_provider_id", methods=["POST"])
 #@login_required
@@ -1944,6 +1876,10 @@ def api_get_provider_id():
     except Exception as e:
         print(f"❌ Exception: {e}")
         return jsonify({'status': 'FAIL', 'message': str(e)}), 500   """
+
+
+
+
 
 @app.route("/api/patients_by_facility")
 @login_required
@@ -2580,7 +2516,7 @@ def check_availity_eligibility():
 
     try:
         completed = subprocess.run(
-            ["python3", "rpa/eligibilityrpafinal.py", json.dumps(input_data)],
+            ["python", "rpa/eligibilityrpafinal.py", json.dumps(input_data)],
             capture_output=True,
             text=True,
             check=True
